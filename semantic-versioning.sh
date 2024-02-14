@@ -2,10 +2,10 @@
 
 set -eo pipefail
 
-# USAGE: ./semantic-versioning.sh [--print,--stdout,--file,--tag,--git] path1 path2 path3 ...
+# USAGE: ./semvr [--debug,--print,--stdout,--print-only,--final,--final-only]
 #
 # +----------+----------------------------------------------------------+-------+
-# | *        | Anything                                                 | PATCH |
+# | *        | Anything                                                 | RC    |
 # | break    | A breaking change                                        | MAJOR |
 # | feat     | A new feature                                            | MINOR |
 # | fix      | A bug fix                                                | PATCH |
@@ -18,75 +18,78 @@ set -eo pipefail
 # | chore    | Changes to the build process or auxiliary tools          | PATCH |
 # |          | and libraries such as documentation generation           |       |
 # +----------+----------------------------------------------------------+-------|
-#
-# TODO: Support revert ?
-# TODO: Support branches ?
-# TODO: Support git tags ?
-# TODO: Support for other syntax such as: +semver: patch/minor/major
 
-export PATHS=()
+export DEBUG=0
 export SEMVER_PRINT=0
-export SEMVER_FILE=0
-export SEMVER_TAG=0
+export SEMVER_PRINT_ONLY=0
+export SEMVER_FINAL=0
+export SEMVER_FINAL_ONLY=0
 
 parse_args() {
   for arg in "$@"; do
     case "$arg" in
+      --debug)
+        DEBUG=1;;
       --print | --stdout)
         SEMVER_PRINT=1;;
-      --file)
-        SEMVER_FILE=1;;
-      --tag | --git)
-        SEMVER_TAG=1;;
-      *)
-        PATHS+=("$arg");;
+      --print-only)
+        SEMVER_PRINT_ONLY=1;;
+      --final)
+        SEMVER_FINAL=1;;
+      --final-only)
+        SEMVER_FINAL_ONLY=1;;
     esac
   done
+}
 
-  if [[ "${#PATHS[@]}" = "0" ]]; then
-    PATHS+=(".")
+semvr() {
+  local PATCH=0
+  local MINOR=1
+  local MAJOR=0
+  local RC="0"
+
+  CURRENT=$(git describe --tags --abbrev=0 2> /dev/null || echo "0.1.0")
+  HISTORY=$(git --no-pager log --reverse --oneline "$CURRENT"..HEAD | awk '{ $1=""; print }' | sed -e 's/^[[:space:]]*//')
+  IFS="." read -r MAJOR MINOR PATCH <<< "$CURRENT"
+
+  while IFS= read -r MESSAGE; do
+    (( DEBUG )) && echo -e "\e[32m-> Commit:\e[0m $MESSAGE"
+
+    if [[ "$MESSAGE" =~ ^break ]]; then
+      MAJOR=$((MAJOR+1))
+      MINOR=0
+      PATCH=0
+      RC=0
+
+      (( DEBUG )) && echo -e "\e[33m-->\e[0m Major +1"
+    elif [[ "$MESSAGE" =~ ^feat|^perf ]]; then
+      MINOR=$((MINOR+1))
+      PATCH=0
+      RC=0
+
+      (( DEBUG )) && echo -e "\e[33m-->\e[0m Minor +1"
+    elif [[ "$MESSAGE" =~ ^fix|^docs|^style|^refactor|^test|^chore ]]; then
+      PATCH=$((PATCH+1))
+      RC=0
+
+      (( DEBUG )) && echo -e "\e[33m-->\e[0m Patch +1"
+    else
+      RC=$((RC+1))
+
+      (( DEBUG )) && echo -e "\e[33m-->\e[0m RC +1"
+    fi
+  done < <(printf '%s\n' "$HISTORY")
+
+  if [[ "$SEMVER_PRINT" = "1" ]]; then
+    echo "$MAJOR.$MINOR.$PATCH $MAJOR.$MINOR.$PATCH-$RC $MAJOR $MINOR $PATCH $RC"
+  elif [[ "$SEMVER_PRINT_ONLY" = "1" ]]; then
+    echo "$MAJOR.$MINOR.$PATCH-$RC"
+  elif [[ "$SEMVER_FINAL" = "1" ]]; then
+    echo "$MAJOR.$MINOR.$PATCH $MAJOR.$MINOR.$PATCH $MAJOR $MINOR $PATCH"
+  elif [[ "$SEMVER_FINAL_ONLY" = "1" ]]; then
+    echo "$MAJOR.$MINOR.$PATCH"
   fi
 }
 
-scan_paths() {
-  local PATHS=("$@")
-
-  for FOLDER in "${PATHS[@]}"; do
-    local PATCH=0
-    local MINOR=0
-    local MAJOR=0
-
-    #echo "--> $FOLDER"
-
-    HISTORY=$(git --no-pager log --reverse --oneline -- "$FOLDER" | awk '{ $1=""; print }' | sed -e 's/^[[:space:]]*//')
-
-    while IFS= read -r MESSAGE; do
-      #echo "$MESSAGE"
-
-      if [[ "$MESSAGE" =~ ^break ]]; then
-        MAJOR=$((MAJOR+1))
-        MINOR=0
-        PATCH=0
-      elif [[ "$MESSAGE" =~ ^feat|^perf ]]; then
-        MINOR=$((MINOR+1))
-        PATCH=0
-      elif [[ "$MESSAGE" =~ ^fix|^docs|^style|^refactor|^test|^chore ]]; then
-        PATCH=$((PATCH+1))
-      else
-        PATCH=$((PATCH+1))
-      fi
-    done < <(printf '%s\n' "$HISTORY")
-
-    if [[ "$SEMVER_PRINT" = "1" ]]; then
-      echo "$FOLDER $MAJOR.$MINOR.$PATCH $MAJOR $MINOR $PATCH"
-    #elif [[ "$SEMVER_FILE" = "1" ]]; then
-      # TODO
-    #elif [[ "$SEMVER_TAG" = "1" ]]; then
-      # TODO
-    fi
-  done
-}
-
 parse_args "$@"
-scan_paths "${PATHS[@]}"
-
+semvr
